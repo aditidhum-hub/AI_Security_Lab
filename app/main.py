@@ -13,9 +13,14 @@ from app.ai import get_ai_answer
 # Create the FastAPI app instance.
 # FastAPI automatically generates interactive API docs at /docs
 app = FastAPI(
-    title="SafeAI Lab — Day 1",
-    description="A minimal AI question-answering API powered by Google Gemini.",
-    version="0.1.0",
+    title="SafeAI Lab — Day 2",
+    description=(
+        "A minimal AI question-answering and evaluation API powered by Google Gemini.\n\n"
+        "Endpoints:\n"
+        "- **POST /ask** — send a question, get an AI answer.\n"
+        "- **POST /evaluate** — send a question + expected answer, get pass/fail."
+    ),
+    version="0.2.0",
 )
 
 
@@ -29,8 +34,22 @@ class QuestionRequest(BaseModel):
 
 
 class AnswerResponse(BaseModel):
-    """The JSON body we send back to the user."""
+    """The JSON body we send back to the user from /ask."""
     answer: str
+
+
+class EvaluateRequest(BaseModel):
+    """The JSON body the user must send to /evaluate."""
+    question: str
+    expected_answer: str
+
+
+class EvaluateResponse(BaseModel):
+    """The JSON body we send back from /evaluate."""
+    question: str
+    expected_answer: str
+    ai_answer: str
+    passed: bool
 
 
 # --- Endpoints ---
@@ -67,3 +86,47 @@ def ask(request: QuestionRequest):
             status_code=502,
             detail=f"AI service error: {str(e)}",
         )
+
+
+@app.post("/evaluate", response_model=EvaluateResponse)
+def evaluate(request: EvaluateRequest):
+    """
+    Send a question to the AI and check whether its answer matches the expected answer.
+
+    - Receives: { "question": "What is 2+2?", "expected_answer": "4" }
+    - Returns:  { "question": ..., "expected_answer": ..., "ai_answer": ..., "passed": true/false }
+
+    **Comparison logic (intentionally simple):**
+    The AI answer and the expected answer are both stripped of leading/trailing
+    whitespace and lowercased, then we check whether the expected answer string
+    appears anywhere inside the AI answer string.
+    This is deliberately naive — a learning exercise in why simple string
+    matching is not enough for real AI evaluation.
+    """
+    if not request.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty.")
+    if not request.expected_answer.strip():
+        raise HTTPException(status_code=400, detail="Expected answer cannot be empty.")
+
+    try:
+        ai_answer = get_ai_answer(request.question)
+    except ValueError as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI service error: {str(e)}",
+        )
+
+    # --- Simple comparison ---
+    # Strip whitespace and lowercase both strings, then check if the
+    # expected answer is a substring of the AI answer.
+    # Example: expected="4", ai_answer="The answer is 4." → passed=True
+    passed = request.expected_answer.strip().lower() in ai_answer.strip().lower()
+
+    return EvaluateResponse(
+        question=request.question,
+        expected_answer=request.expected_answer,
+        ai_answer=ai_answer,
+        passed=passed,
+    )
